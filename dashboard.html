@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NYC Taxi Analytics Dashboard</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --accent: #3b82f6;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+    --purple: #a855f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+    min-height: 100vh;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+  }
+  .header h1 {
+    font-size: 24px; font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .header .sub { color: var(--muted); font-size: 14px; -webkit-text-fill-color: var(--muted); }
+  .kpi-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px; margin-bottom: 24px;
+  }
+  .kpi {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 20px;
+  }
+  .kpi .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .kpi .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+  .kpi .change { font-size: 13px; margin-top: 2px; }
+  .up { color: var(--green); } .down { color: var(--red); }
+  .grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;
+  }
+  .grid-3 {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px;
+  }
+  .card h3 { font-size: 14px; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .card canvas { width: 100% !important; height: auto !important; max-height: 300px; }
+  table.w-full { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.w-full th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.w-full td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.w-full tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-v1 { background: #1e3a5f; color: #93c5fd; }
+  .badge-v2 { background: #3b1f4e; color: #c4b5fd; }
+  .badge-v6 { background: #1e3f2f; color: #86efac; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .bar-row .bar-label { width: 100px; text-align: right; font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  .bar-row .bar-track { flex: 1; height: 20px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .bar-row .bar-fill { height: 100%; border-radius: 4px; transition: width .6s; }
+  .bar-row .bar-val { width: 80px; text-align: right; font-size: 12px; flex-shrink: 0; }
+  .color-0 { background: var(--accent); }
+  .color-1 { background: var(--purple); }
+  .color-2 { background: var(--green); }
+  .color-3 { background: var(--amber); }
+  .color-4 { background: var(--red); }
+  @media (max-width: 900px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>&#128662; NYC Taxi Analytics</h1>
+    <div class="sub">Gold Layer Dashboard &middot; Data via ClickHouse</div>
+  </div>
+  <div style="text-align:right; font-size:13px; color:var(--muted);">
+    Last updated: March 2026
+  </div>
+</div>
+
+<div class="kpi-row" id="kpiRow"></div>
+
+<div class="grid-2">
+  <div class="card"><h3>Daily Revenue Trend (March 2026)</h3><canvas id="dailyChart"></canvas></div>
+  <div class="card"><h3>Trips by Hour (March 31, 2026)</h3><canvas id="hourlyChart"></canvas></div>
+</div>
+
+<div class="grid-3">
+  <div class="card"><h3>Vendor Market Share (March)</h3><canvas id="vendorChart"></canvas></div>
+  <div class="card"><h3>Payment Type Breakdown</h3><canvas id="paymentChart"></canvas></div>
+  <div class="card"><h3>Rate Code Distribution</h3><canvas id="rateCodeChart"></canvas></div>
+</div>
+
+<div class="grid-2">
+  <div class="card"><h3>Top Routes (March 31)</h3>
+    <table class="w-full" id="routeTable"></table>
+  </div>
+  <div class="card"><h3>Hourly Revenue Trend (March Avg)</h3><canvas id="hourlyRevenueChart"></canvas></div>
+</div>
+
+<script>
+const fmt = n => '$' + Number(n).toLocaleString('en-US', {maximumFractionDigits:0});
+const fmtNum = n => Number(n).toLocaleString('en-US', {maximumFractionDigits:0});
+
+// ---- KPI Data ----
+const kpis = [
+  { label: 'Total Trips (Mar)', value: '3,848,628' },
+  { label: 'Total Revenue (Mar)', value: '$116.8M' },
+  { label: 'Avg Fare/Trip', value: '$8.76' },
+  { label: 'Avg Tip/Trip', value: '$1.20' },
+  { label: 'Avg Trips/Day', value: '124,149' },
+  { label: 'Busiest Hour', value: '18:00 (8,268 avg)' },
+];
+const kpiRow = document.getElementById('kpiRow');
+kpis.forEach(k => {
+  const div = document.createElement('div'); div.className = 'kpi';
+  div.innerHTML = `<div class="label">${k.label}</div><div class="value">${k.value}</div>`;
+  kpiRow.appendChild(div);
+});
+
+// ---- Daily Revenue Trend ----
+const dailyData = [
+  {date:'03-01',trips:108973,rev:3382210},{date:'03-02',trips:110386,rev:3350471},
+  {date:'03-03',trips:131853,rev:3953753},{date:'03-04',trips:122684,rev:3702475},
+  {date:'03-05',trips:148777,rev:4728427},{date:'03-06',trips:130721,rev:3900684},
+  {date:'03-07',trips:128505,rev:3591883},{date:'03-08',trips:111725,rev:3379231},
+  {date:'03-09',trips:105048,rev:3317754},{date:'03-10',trips:125773,rev:3918149},
+  {date:'03-11',trips:128685,rev:3913650},{date:'03-12',trips:156930,rev:4924069},
+  {date:'03-13',trips:143104,rev:4330311},{date:'03-14',trips:139837,rev:3954131},
+  {date:'03-15',trips:115975,rev:3491856},{date:'03-16',trips:111864,rev:3385563},
+  {date:'03-17',trips:124658,rev:3938772},{date:'03-18',trips:141197,rev:4330967},
+  {date:'03-19',trips:145956,rev:4531537},{date:'03-20',trips:138623,rev:4262165},
+  {date:'03-21',trips:132536,rev:3880017},{date:'03-22',trips:113059,rev:3529691},
+  {date:'03-23',trips:103567,rev:3134817},{date:'03-24',trips:116004,rev:3522463},
+  {date:'03-25',trips:118866,rev:3612905},{date:'03-26',trips:125729,rev:3865610},
+  {date:'03-27',trips:123648,rev:3725691},{date:'03-28',trips:131008,rev:3710815},
+  {date:'03-29',trips:106581,rev:3191279},{date:'03-30',trips:98676,rev:3000388},
+  {date:'03-31',trips:111680,rev:3329971}
+];
+
+function lineChart(canvasId, data, yLabel, color) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const W = canvas.width = rect.width - 32 || 600;
+  const H = canvas.height = 220;
+  const pad = {top:20, bottom:30, left:55, right:20};
+  const iw = W - pad.left - pad.right;
+  const ih = H - pad.top - pad.bottom;
+
+  const vals = data.map(d => d[Object.keys(d)[1]]);
+  const max = Math.max(...vals) * 1.1;
+  const min = Math.min(...vals) * 0.9;
+
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
+
+  // grid lines
+  for (let i=0;i<=4;i++) {
+    const y = pad.top + ih * (1 - i/4);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W-pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = '#94a3b8'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(fmt(min + (max-min)*i/4), pad.left-6, y+3);
+  }
+
+  // line
+  ctx.beginPath();
+  data.forEach((d,i) => {
+    const x = pad.left + iw * i / (data.length-1);
+    const y = pad.top + ih * (1 - (vals[i]-min)/(max-min));
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+
+  // fill
+  ctx.lineTo(pad.left + iw, pad.top + ih);
+  ctx.lineTo(pad.left, pad.top + ih);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, pad.top, 0, pad.top+ih);
+  g.addColorStop(0, color + '40');
+  g.addColorStop(1, color + '05');
+  ctx.fillStyle = g; ctx.fill();
+
+  // x labels every 5
+  ctx.fillStyle = '#94a3b8'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  data.forEach((d,i) => {
+    if (i % 5 === 0 || i === data.length-1) {
+      const x = pad.left + iw * i / (data.length-1);
+      ctx.fillText(d.date, x, H - 8);
+    }
+  });
+}
+
+function barChart(canvasId, labels, values, colors) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const W = canvas.width = rect.width - 32 || 600;
+  const H = canvas.height = 220;
+  const pad = {top:20, bottom:30, left:45, right:20};
+  const iw = W - pad.left - pad.right;
+  const ih = H - pad.top - pad.bottom;
+  const max = Math.max(...values) * 1.15;
+
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
+  for (let i=0;i<=4;i++) {
+    const y = pad.top + ih * (1 - i/4);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W-pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#94a3b8'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(fmtNum(max * i/4), pad.left-6, y+3);
+  }
+
+  const gap = 0.2;
+  const bw = iw / labels.length * (1 - gap);
+  labels.forEach((l,i) => {
+    const x = pad.left + iw * i / labels.length + iw / labels.length * gap/2;
+    const h = (values[i] / max) * ih;
+    const y = pad.top + ih - h;
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fillRect(x, y, bw, h);
+    ctx.fillStyle = '#94a3b8'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(l, x + bw/2, H - 8);
+  });
+}
+
+function pieChart(canvasId, labels, values, colors) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const W = canvas.width = rect.width - 32 || 300;
+  const H = canvas.height = 220;
+  const cx = W * 0.35, cy = H / 2, r = Math.min(W*0.28, H*0.35);
+  const total = values.reduce((a,b)=>a+b,0);
+
+  ctx.clearRect(0,0,W,H);
+  let start = -Math.PI/2;
+  values.forEach((v,i) => {
+    const angle = (v / total) * Math.PI * 2;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,start,start+angle); ctx.closePath();
+    ctx.fillStyle = colors[i % colors.length]; ctx.fill();
+    if (angle > 0.3) {
+      const mid = start + angle/2;
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText((v/total*100).toFixed(1)+'%', cx + Math.cos(mid)*r*0.65, cy + Math.sin(mid)*r*0.65 + 3);
+    }
+    start += angle;
+  });
+  // legend
+  let ly = 20;
+  labels.forEach((l,i) => {
+    const lx = W * 0.6;
+    ctx.fillStyle = colors[i % colors.length]; ctx.fillRect(lx, ly, 10, 10);
+    ctx.fillStyle = '#f1f5f9'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(l + ' (' + fmtNum(values[i]) + ')', lx + 16, ly + 9);
+    ly += 18;
+  });
+}
+
+// Daily chart
+lineChart('dailyChart', dailyData, 'Revenue', '#3b82f6');
+
+// Hourly chart (March 31)
+const hrLabels = Array.from({length:24},(_,i)=>i.toString());
+const hrTrips = [1537,742,450,337,369,926,2202,4309,5777,5892,5176,5473,6028,6102,6813,6862,6887,7972,7869,6905,6586,7294,5719,3453];
+const hrColors = hrTrips.map(v => v < 1000 ? '#334155' : v < 4000 ? '#3b82f6' : v < 6000 ? '#a855f7' : '#22c55e');
+// We'll use custom approach with gradient
+barChart('hourlyChart', hrLabels, hrTrips, Array(24).fill('#3b82f6'));
+
+// Vendor chart
+pieChart('vendorChart',
+  ['VeriFone','Creative Mobile Tech','Vendor 6'],
+  [3086245, 758219, 8164],
+  ['#3b82f6','#a855f7','#22c55e']
+);
+
+// Payment chart
+pieChart('paymentChart',
+  ['Credit Card','Cash','Dispute','Credit Card (dup)','No Charge'],
+  [2550800, 942625, 335074, 15842, 8287],
+  ['#3b82f6','#f59e0b','#ef4444','#a855f7','#22c55e']
+);
+
+// Rate code chart
+pieChart('rateCodeChart',
+  ['Standard Rate','Other','Custom','JFK','Negotiated','Newark','Nassau','Group Ride'],
+  [2643244, 942625, 139299, 89619, 18421, 11555, 7864, 1],
+  ['#3b82f6','#f59e0b','#ef4444','#22c55e','#a855f7','#06b6d4','#f97316','#78716c']
+);
+
+// Hourly Revenue Chart
+const hrLabels2 = Array.from({length:24},(_,i)=>i.toString());
+const hrRevenues = [122154,76056,46854,39581,40386,43065,72965,121649,156798,149091,146801,157706,172452,180062,202474,214246,230496,255104,262143,238081,226549,238989,212494,162789];
+// No separate chart needed - use same barChart with revenue data
+barChart('hourlyRevenueChart', hrLabels2, hrRevenues, Array(24).fill('#22c55e'));
+
+// Top routes table
+const routes = [
+  {pu:237, do:236, trips:758, rev:11979},
+  {pu:236, do:237, trips:628, rev:10370},
+  {pu:237, do:237, trips:567, rev:7945},
+  {pu:236, do:236, trips:459, rev:6108},
+  {pu:161, do:237, trips:393, rev:7264},
+  {pu:237, do:161, trips:381, rev:6871},
+  {pu:161, do:236, trips:368, rev:8590},
+  {pu:237, do:162, trips:315, rev:5415},
+  {pu:236, do:161, trips:305, rev:7130},
+  {pu:239, do:238, trips:293, rev:4152},
+];
+const rt = document.getElementById('routeTable');
+rt.innerHTML = '<tr><th>Pickup Zone</th><th>Dropoff Zone</th><th>Trips</th><th>Revenue</th></tr>' +
+  routes.map(r => `<tr><td>${r.pu}</td><td>${r.do}</td><td>${fmtNum(r.trips)}</td><td>${fmt(r.rev)}</td></tr>`).join('');
+
+</script>
+</body>
+</html>

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NYC Taxi Analysis Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+  background: #0f1117; color: #e1e4e8; padding: 24px;
+}
+h1 { font-size: 28px; font-weight: 600; margin-bottom: 4px; }
+.subtitle { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.kpi-card {
+  background: #1c1e26; border-radius: 10px; padding: 16px; border: 1px solid #2d2f3a;
+}
+.kpi-label { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: .5px; }
+.kpi-value { font-size: 26px; font-weight: 700; margin-top: 4px; }
+.kpi-sub { font-size: 12px; color: #58a6ff; margin-top: 2px; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.chart-full { grid-column: 1 / -1; }
+.chart-card {
+  background: #1c1e26; border-radius: 10px; padding: 16px; border: 1px solid #2d2f3a;
+}
+.chart-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #c9d1d9; }
+canvas { width: 100%; height: 280px; display: block; }
+.chart-card.chart-full canvas { height: 320px; }
+@media (max-width: 800px) { .chart-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>NYC Taxi Analysis</h1>
+<p class="subtitle">Gold-layer dashboard &mdash; all metrics aggregated from silver_taxi_trips</p>
+
+<div class="kpi-grid" id="kpiGrid"></div>
+
+<div class="chart-grid">
+  <div class="chart-card chart-full">
+    <div class="chart-title">Daily Trips &amp; Revenue</div>
+    <canvas id="dailyTrend"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Hourly Trip Pattern</div>
+    <canvas id="hourlyPattern"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Monthly Trips by Vendor</div>
+    <canvas id="vendorChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Top Routes (by trip count)</div>
+    <canvas id="routeChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Payment Type Share</div>
+    <canvas id="paymentChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Average Revenue by Day of Week</div>
+    <canvas id="dowChart"></canvas>
+  </div>
+</div>
+
+<script>
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+function fmt(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return Math.round(n).toLocaleString();
+}
+function fmt$ (n) { return '$' + (n/1e6).toFixed(1) + 'M'; }
+
+function hex(c, a) { return c + (a ? Math.round(a*255).toString(16).padStart(2,'0') : ''); }
+
+const COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#a371f7','#db6d28','#1f6feb','#2ea043'];
+const BG = '#1c1e26', GRID = '#2d2f3a', TEXT = '#8b949e';
+
+// ── Canvas helpers ──
+function setupCanvas(canvas, w, h) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = (w || canvas.clientWidth) * dpr;
+  canvas.height = (h || canvas.clientHeight) * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+
+function drawLineChart(ctx, labels, datasets, opts = {}) {
+  const W = ctx.canvas.width / (window.devicePixelRatio || 1);
+  const H = ctx.canvas.height / (window.devicePixelRatio || 1);
+  const pad = { t: 10, r: 16, b: 40, l: 56 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+
+  // find range
+  let minY = Infinity, maxY = -Infinity;
+  for (const d of datasets) {
+    for (const v of d.data) {
+      if (v < minY) minY = v;
+      if (v > maxY) maxY = v;
+    }
+  }
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const range = maxY - minY;
+  minY = Math.max(0, minY - range * 0.05);
+  maxY = maxY + range * 0.05;
+  const yR = maxY - minY;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // grid lines
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  const nGrid = 5;
+  for (let i = 0; i <= nGrid; i++) {
+    const y = pad.t + ih * (1 - i / nGrid);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    const val = minY + yR * (i / nGrid);
+    ctx.fillStyle = TEXT; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(opts.yFmt ? opts.yFmt(val) : fmt(val), pad.l - 6, y + 4);
+  }
+
+  // x labels
+  const step = Math.max(1, Math.floor(labels.length / 10));
+  ctx.fillStyle = TEXT; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i < labels.length; i += step) {
+    const x = pad.l + iw * (i / (labels.length - 1 || 1));
+    ctx.fillText(labels[i], x, H - 4);
+  }
+
+  // lines
+  for (let di = 0; di < datasets.length; di++) {
+    const d = datasets[di], color = d.color || COLORS[di % COLORS.length];
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < d.data.length; i++) {
+      const x = pad.l + iw * (i / (d.data.length - 1 || 1));
+      const y = pad.t + ih * (1 - (d.data[i] - minY) / yR);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // fill area
+    const lastX = pad.l + iw * ((d.data.length - 1) / (d.data.length - 1 || 1));
+    ctx.lineTo(lastX, pad.t + ih);
+    ctx.lineTo(pad.l, pad.t + ih);
+    ctx.closePath();
+    ctx.fillStyle = hex(color, 0.1); ctx.fill();
+  }
+}
+
+function drawBarChart(ctx, labels, datasets, opts = {}) {
+  const W = ctx.canvas.width / (window.devicePixelRatio || 1);
+  const H = ctx.canvas.height / (window.devicePixelRatio || 1);
+  const pad = { t: 10, r: 16, b: opts.hideX ? 10 : 50, l: 56 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+
+  let maxY = 0;
+  for (const d of datasets) for (const v of d.data) if (v > maxY) maxY = v;
+  maxY *= 1.1;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // grid
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  const nGrid = 4;
+  for (let i = 0; i <= nGrid; i++) {
+    const y = pad.t + ih * (1 - i / nGrid);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    const val = maxY * (i / nGrid);
+    ctx.fillStyle = TEXT; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(opts.yFmt ? opts.yFmt(val) : fmt(val), pad.l - 6, y + 4);
+  }
+
+  const n = labels.length;
+  const gW = iw / n;
+  const nD = datasets.length;
+  const bW = Math.min(gW * 0.7 / nD, 30);
+
+  for (let di = 0; di < nD; di++) {
+    const d = datasets[di];
+    const color = d.color || COLORS[di % COLORS.length];
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + iw * ((i + 0.5) / n) - (bW * nD) / 2 + di * bW;
+      const h = (d.data[i] / maxY) * ih;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, pad.t + ih - h, bW - 2, h);
+    }
+  }
+
+  // x labels
+  if (!opts.hideX) {
+    ctx.fillStyle = TEXT; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    const labelStep = Math.max(1, Math.floor(n / 15));
+    for (let i = 0; i < n; i += labelStep) {
+      const x = pad.l + iw * ((i + 0.5) / n);
+      ctx.save(); ctx.translate(x, H - 8); ctx.rotate(-0.5);
+      ctx.fillText(labels[i], 0, 0); ctx.restore();
+    }
+  }
+}
+
+function drawDougnut(ctx, labels, values) {
+  const W = ctx.canvas.width / (window.devicePixelRatio || 1);
+  const H = ctx.canvas.height / (window.devicePixelRatio || 1);
+  ctx.clearRect(0, 0, W, H);
+
+  const cx = W * 0.4, cy = H / 2, r = Math.min(cx, cy) - 24, ir = r * 0.55;
+  const total = values.reduce((a, b) => a + b, 0);
+
+  let start = -Math.PI / 2;
+  for (let i = 0; i < labels.length; i++) {
+    const slice = (values[i] / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, start, start + slice);
+    ctx.arc(cx, cy, ir, start + slice, start, true);
+    ctx.closePath();
+    ctx.fillStyle = COLORS[i % COLORS.length];
+    ctx.fill();
+    start += slice;
+  }
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(fmt(total), cx, cy + 5);
+
+  // legend
+  let ly = 20;
+  ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+  for (let i = 0; i < labels.length; i++) {
+    const x = W * 0.65;
+    ctx.fillStyle = COLORS[i % COLORS.length];
+    ctx.fillRect(x, ly, 10, 10);
+    ctx.fillStyle = TEXT;
+    ctx.fillText(labels[i] + '  ' + fmt(values[i]) + ' (' + (values[i]/total*100).toFixed(1) + '%)', x + 14, ly + 10);
+    ly += 22;
+  }
+}
+
+// ── Load & render ──
+async function loadJSON(url) {
+  const r = await fetch(url);
+  return r.json();
+}
+
+function parseClickHouseJSON(data) {
+  return data.data;
+}
+
+(async function() {
+  const [daily, vendor, routes, payment, hourly, dow, summary] = await Promise.all([
+    loadJSON('gold_daily_stats.json').then(parseClickHouseJSON),
+    loadJSON('gold_vendor_monthly.json').then(parseClickHouseJSON),
+    loadJSON('gold_top_routes.json').then(parseClickHouseJSON),
+    loadJSON('gold_payment_types.json').then(parseClickHouseJSON),
+    loadJSON('gold_hourly_pattern.json').then(parseClickHouseJSON),
+    loadJSON('gold_dow_pattern.json').then(parseClickHouseJSON),
+    loadJSON('gold_summary.json').then(parseClickHouseJSON),
+  ]);
+
+  const s = summary[0];
+  document.getElementById('kpiGrid').innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">Total Trips</div><div class="kpi-value">${fmt(s.total_trips)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total Revenue</div><div class="kpi-value">${fmt$(s.total_revenue)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Avg Fare</div><div class="kpi-value">$${(+s.avg_fare).toFixed(2)}</div><div class="kpi-sub">per trip</div></div>
+    <div class="kpi-card"><div class="kpi-label">Avg Tip</div><div class="kpi-value">$${(+s.avg_tip).toFixed(2)}</div><div class="kpi-sub">per trip</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total Distance</div><div class="kpi-value">${(+s.total_distance/1e6).toFixed(1)}M</div><div class="kpi-sub">miles</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total Passengers</div><div class="kpi-value">${fmt(s.total_passengers)}</div></div>
+  `;
+
+  // 1. Daily trend
+  const ctx1 = setupCanvas(document.getElementById('dailyTrend'));
+  const dates = daily.map(r => r.pickup_date.slice(5));
+  drawLineChart(ctx1, dates, [
+    { data: daily.map(r => +r.trip_count), color: '#58a6ff' },
+    { data: daily.map(r => +r.total_revenue), color: '#3fb950' },
+  ], { yFmt: v => v > 1e6 ? (v/1e6).toFixed(1)+'M' : fmt(v) });
+
+  // 2. Hourly pattern
+  const ctx2 = setupCanvas(document.getElementById('hourlyPattern'));
+  const weekday = hourly.filter(r => +r.is_weekend === 0);
+  const weekend = hourly.filter(r => +r.is_weekend === 1);
+  drawLineChart(ctx2, weekday.map(r => r.pickup_hour.padStart(2,'0')), [
+    { data: weekday.map(r => +r.avg_trips), color: '#58a6ff' },
+    { data: weekend.map(r => +r.avg_trips), color: '#a371f7' },
+  ]);
+
+  // 3. Vendor monthly
+  const ctx3 = setupCanvas(document.getElementById('vendorChart'));
+  const vMonths = [...new Set(vendor.map(r => r.month))].sort();
+  const vIds = [...new Set(vendor.map(r => r.VendorID))].sort();
+  const vLabels = {};
+  vendor.forEach(r => { if (!vLabels[r.VendorID]) vLabels[r.VendorID] = r.vendor_name; });
+  const vDatasets = vIds.map((vid, i) => ({
+    data: vMonths.map(m => {
+      const row = vendor.find(r => r.month === m && +r.VendorID === +vid);
+      return row ? +row.trip_count : 0;
+    }),
+    color: COLORS[i % COLORS.length],
+  }));
+  drawBarChart(ctx3, vMonths.map(m => m.slice(5)), vDatasets, { yFmt: fmt });
+
+  // 4. Top routes
+  const ctx4 = setupCanvas(document.getElementById('routeChart'));
+  drawBarChart(ctx4, routes.map(r => r.PULocationID + '\u2192' + r.DOLocationID), [
+    { data: routes.map(r => +r.trip_count), color: '#d29922' },
+  ], { hideX: true });
+
+  // 5. Payment type
+  const ctx5 = setupCanvas(document.getElementById('paymentChart'));
+  const lastPayMonth = payment.reduce((a, b) => a.month > b.month ? a : b);
+  const payByType = {};
+  payment.forEach(r => { payByType[r.slice_label] = (+r.trip_count); });
+  const pLabels = Object.keys(payByType);
+  const pValues = Object.values(payByType);
+  drawDougnut(ctx5, pLabels, pValues);
+
+  // 6. Day of week
+  const ctx6 = setupCanvas(document.getElementById('dowChart'));
+  const dowAgg = {};
+  daily.forEach(r => {
+    const d = new Date(r.pickup_date).getDay();
+    if (!dowAgg[d]) dowAgg[d] = { trips: 0, rev: 0, count: 0 };
+    dowAgg[d].trips += +r.trip_count;
+    dowAgg[d].rev += +r.total_revenue;
+    dowAgg[d].count++;
+  });
+  const dowLabels = DOW;
+  const dowData = dowLabels.map((_, i) => dowAgg[i] ? dowAgg[i].rev / dowAgg[i].count : 0);
+  drawBarChart(ctx6, dowLabels, [
+    { data: dowData, color: '#db6d28' },
+  ], { yFmt: fmt$ });
+})();
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => location.reload(), 400);
+});
+</script>
+</body>
+</html>
