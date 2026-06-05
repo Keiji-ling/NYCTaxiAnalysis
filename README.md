@@ -27,4 +27,4 @@ This project builds an end-to-end data analytics pipeline using ClickHouse and P
 - Used AI-assisted workflow for development and debugging
 
 ## Dashboard
-(Add screenshot here)
+![Dashboard](NYCTaxiAnalysis_dash.png)
