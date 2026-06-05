@@ -28,3 +28,5 @@ This project builds an end-to-end data analytics pipeline using ClickHouse and P
 
 ## Dashboard
 ![Dashboard](NYCTaxiAnalysis_dash.png)
+*Figure: Power BI dashboard showing taxi demand trends, time patterns, and location-based analysis derived from the Gold layer.*
+``
